@@ -42,6 +42,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.Switch;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import com.mbientlab.metawear.IllegalRouteOperationException;
 import com.mbientlab.metawear.MetaWearBoard;
@@ -60,6 +61,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import bolts.Task;
 
@@ -202,16 +204,32 @@ public class DeviceConfigFragment extends AppFragmentBase {
                             .create();
                     configDialog.show();
 
+                    int maxRetries = 3;
+                    AtomicInteger retryCount = new AtomicInteger();
+
                     Task.callInBackground(() -> {
                         Task<Void> task = Task.forResult(null);
                         for (final MetaBaseDevice d : parameter.devices) {
                             final MetaWearBoard m = activityBus.getMetaWearBoard(d.btDevice);
+                            Task<Void> finalTask = task;
                             task = task.onSuccessTask(ignored -> {
                                 owner.runOnUiThread(() -> ((TextView) configDialog.findViewById(R.id.message)).setText(owner.getString(R.string.message_config_board, d.name)));
                                 return m.connectAsync();
                             }).continueWithTask(task2 -> {
                                 if (task2.isFaulted()) {
-                                    throw new RuntimeException(String.format("This session has been cancelled because the app failed to configure '%s'", d.name), task2.getError());
+                                    if (retryCount.get() < maxRetries) {
+                                        // Retry the task
+                                        retryCount.getAndIncrement();
+
+                                        return Task.delay(1000L) // Delay before retrying (optional)
+                                                .onSuccessTask(ignored -> {
+                                                    // Retry the same task
+                                                    return finalTask;
+                                                });
+                                    } else {
+                                        // Maximum retries reached, throw an exception
+                                        throw new RuntimeException(String.format("This session has been cancelled because the app failed to configure '%s'", d.name), task2.getError());
+                                    }
                                 }
                                 return task2;
                             }).onSuccessTask(ignored -> {
